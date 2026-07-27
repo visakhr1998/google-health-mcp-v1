@@ -1,0 +1,4 @@
+#!/bin/sh
+# Blocks commits containing Google credential material.
+# Enable once per clone:  git config core.hooksPath .githooks
+exec node "$(git rev-parse --show-toplevel)/scripts/check-secrets.mjs" --staged

@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "google-health": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/dist/index.js"]
+    }
+  }
+}
