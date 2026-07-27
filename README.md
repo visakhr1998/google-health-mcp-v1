@@ -4,102 +4,91 @@ An MCP (Model Context Protocol) server that connects LLMs to the [Google Health 
 
 ## Features
 
-- **12 read-only tools** for safe, non-destructive access to Google Health data
+- **11 read-only tools** for safe, non-destructive access to Google Health data
 - **40+ health data types** including steps, heart rate, sleep, exercise, weight, SpO2, calories, and more
+- **One-command sign-in** — `npm run auth` opens a browser once; tokens refresh themselves after that
 - **Daily and physical-time roll-ups** for aggregated health summaries
 - **Multi-source reconciliation** to deduplicate data from multiple devices
 - **Dual response format** (JSON or Markdown) on key read tools
 - **Pagination** across all list endpoints
-- **OAuth 2.0** authentication via environment variable or runtime token tool
 
 ## Prerequisites
 
 - **Node.js** >= 18
 - A **Google Cloud project** with the Google Health API enabled
-- An **OAuth 2.0 access token** with the appropriate `googlehealth.*` scopes
 
-## Installation
+## Setup
+
+### 1. Create an OAuth client
+
+In [Google Cloud Console](https://console.cloud.google.com) → **APIs & Services → Credentials → Create credentials → OAuth client ID**:
+
+- **Application type: Desktop app**
+
+Desktop-app clients may redirect to any `http://127.0.0.1:<port>`, so there are no redirect URIs to register.
+
+### 2. Publish the consent screen — do not skip this
+
+Go to **APIs & Services → OAuth consent screen** and set **Publishing status** to **In production**.
+
+While the consent screen sits in *Testing*, **Google expires every refresh token after 7 days**. The symptom is a server that works for about a week and then fails every tool call with `invalid_grant`, over and over. Publishing is the fix; re-authenticating only buys another 7 days. For a personal app where you are the only user, publishing is the supported path — verification is only required to distribute the app to other people.
+
+### 3. Configure and sign in
 
 ```bash
-git clone <repo-url>
-cd google-health-mcp-v1
 npm install
-npm run build
+cp .env.example .env      # then fill in client ID and secret
+npm run auth
 ```
 
-## Getting an OAuth Token
+`npm run auth` opens your browser, you consent once, and the refresh token is written to `token.json` (gitignored). You should not need to touch auth again.
 
-### Option 1: OAuth 2.0 Playground (recommended for testing)
-
-1. In [Google Cloud Console](https://console.cloud.google.com) > **APIs & Services > Credentials**, create an **OAuth 2.0 Client ID** (Web application type)
-2. Add `https://developers.google.com/oauthplayground` as an authorized redirect URI
-3. Go to the [OAuth 2.0 Playground](https://developers.google.com/oauthplayground)
-4. Click the gear icon > check **"Use your own OAuth credentials"** > paste your Client ID and Secret
-5. In Step 1, enter the scopes you need (see [Scopes](#oauth-scopes) below)
-6. Click **Authorize APIs** > sign in > click **"Advanced" > "Go to [app name] (unsafe)"**
-7. In Step 2, click **Exchange authorization code for tokens**
-8. Copy the `access_token`
-
-### Option 2: gcloud CLI
+Check on it at any time:
 
 ```bash
-gcloud auth application-default login \
-  --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly,https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly,https://www.googleapis.com/auth/googlehealth.sleep.readonly,https://www.googleapis.com/auth/googlehealth.nutrition.readonly,https://www.googleapis.com/auth/googlehealth.profile.readonly,https://www.googleapis.com/auth/googlehealth.settings.readonly
-
-gcloud auth application-default print-access-token
+npm run auth:status
 ```
 
-> **Note:** Access tokens expire after ~1 hour. Generate a new one when needed.
+That prints the token's age, expiry, granted scopes, and the result of a live refresh — and if a refresh fails, it tells you whether the cause is the 7-day Testing-mode expiry or something else.
+
+### 4. Point your MCP client at it
+
+**Claude Code** (`~/.claude/.mcp.json`) or **Claude Desktop** (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "google-health": {
+      "command": "node",
+      "args": ["/path/to/google-health-mcp-v1/dist/index.js"]
+    }
+  }
+}
+```
+
+No credentials in the config — the server reads `token.json` and `.env` from its own directory. VS Code users get this automatically from the checked-in `.vscode/mcp.json`.
 
 ## Configuration
 
-### Claude Code
+All optional; sensible defaults apply.
 
-Add to your `~/.claude/.mcp.json`:
+| Variable | Purpose |
+|---|---|
+| `GOOGLE_HEALTH_CLIENT_ID` | OAuth client ID (required for `npm run auth`) |
+| `GOOGLE_HEALTH_CLIENT_SECRET` | OAuth client secret (required for `npm run auth`) |
+| `GOOGLE_HEALTH_REFRESH_TOKEN` | Pre-existing refresh token, if you would rather not use the browser flow |
+| `GOOGLE_HEALTH_TOKEN_PATH` | Where to store the token. Defaults to `./token.json` |
+| `GOOGLE_HEALTH_OAUTH_PORT` | Pin the loopback callback port. Only needed for a "Web application" OAuth client |
+| `GOOGLE_HEALTH_AUTO_REAUTH` | Set to `0` to disable the automatic browser re-auth on `invalid_grant` |
 
-```json
-{
-  "mcpServers": {
-    "google-health": {
-      "command": "node",
-      "args": ["/path/to/google-health-mcp-v1/dist/index.js"],
-      "env": {
-        "GOOGLE_HEALTH_ACCESS_TOKEN": "ya29.your-token-here"
-      }
-    }
-  }
-}
-```
+## How authentication behaves
 
-### Claude Desktop
-
-Add to your Claude Desktop config (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "google-health": {
-      "command": "node",
-      "args": ["/path/to/google-health-mcp-v1/dist/index.js"],
-      "env": {
-        "GOOGLE_HEALTH_ACCESS_TOKEN": "ya29.your-token-here"
-      }
-    }
-  }
-}
-```
-
-### Runtime Token
-
-You can also set or refresh the token at runtime using the `googlehealth_set_token` tool, without restarting the server.
+- Access tokens refresh silently; concurrent tool calls share a single refresh rather than each firing their own.
+- The token file is written atomically, and a rotated refresh token from Google is always persisted.
+- On startup the server performs a real refresh, so a dead credential surfaces immediately instead of mid-conversation.
+- If the refresh token is ever rejected, the browser flow starts automatically and the in-flight tool call completes once you consent. Set `GOOGLE_HEALTH_AUTO_REAUTH=0` for a plain error message instead.
 
 ## Tools
-
-### Authentication
-
-| Tool | Description |
-|------|-------------|
-| `googlehealth_set_token` | Set or update the OAuth 2.0 access token at runtime |
 
 ### User Profile & Settings
 
@@ -178,17 +167,9 @@ Use googlehealth_rollup with:
   window_size: "3600s"
 ```
 
-### Get sleep stages from last night
-
-```
-Use googlehealth_list_data_points with:
-  data_type: "sleep"
-  page_size: 1
-```
-
 ## OAuth Scopes
 
-All scopes use the base URL `https://www.googleapis.com/auth/googlehealth`:
+`npm run auth` requests all of these. All use the base URL `https://www.googleapis.com/auth/googlehealth`:
 
 | Scope suffix | Access |
 |-------------|--------|
@@ -202,59 +183,74 @@ All scopes use the base URL `https://www.googleapis.com/auth/googlehealth`:
 | `.irn.readonly` | Irregular rhythm notifications |
 | `.location.readonly` | GPS location during exercise |
 
+The first six are treated as required; a token missing any of them produces a startup warning.
+
 ## Project Structure
 
 ```
-google-health-mcp-v1/
-  src/
-    index.ts          # MCP server with 12 read-only tool registrations
-    api-client.ts     # Shared HTTP client with OAuth and error handling
-    constants.ts      # API base URL, character limit, data type enum
-  dist/               # Compiled JavaScript (npm run build)
-  evaluation.xml      # 10 verified evaluation questions
-  package.json
-  tsconfig.json
+src/
+  index.ts            # server wiring: register tool groups, connect stdio
+  api-client.ts       # HTTP client and error-to-message mapping
+  constants.ts        # base URL, character limit, data types, scopes
+  formatters.ts       # markdown rendering (pure, unit-tested)
+  auth/
+    store.ts          # token persistence — atomic writes, .env loading
+    oauth.ts          # loopback browser login with PKCE
+    client.ts         # OAuth client, refresh, invalid_grant recovery
+  cli/
+    login.ts          # npm run auth
+    status.ts         # npm run auth:status
+  tools/
+    shared.ts         # annotations, schemas, result helpers
+    profile.ts        # 3 profile/settings/identity tools
+    datapoints.ts     # list, get, reconcile
+    rollups.ts        # daily and physical-time roll-ups
+    devices.ts        # devices and TCX export
+scripts/
+  check-secrets.mjs   # credential scanner (pre-commit hook + CI)
+dist/                 # compiled output (npm run build)
+evaluation.xml        # 10 verified evaluation questions
 ```
 
 ## Development
 
 ```bash
-# Install dependencies
 npm install
-
-# Build
 npm run build
-
-# Run
 npm start
+npm run dev            # auto-reload via tsx
+npm test               # unit tests (node:test)
+npm run check-secrets  # scan the tree for credentials
+```
 
-# Dev mode with auto-reload
-npm run dev
+Enable the pre-commit credential guard once per clone:
 
-# Test with MCP Inspector
+```bash
+git config core.hooksPath .githooks
+```
+
+Inspect the tool surface interactively:
+
+```bash
 npx @modelcontextprotocol/inspector node dist/index.js
 ```
 
+## Security
+
+- `.env` and `token.json` hold live credentials and are gitignored. `.env.example` documents the shape.
+- A pre-commit hook and a CI job both run `scripts/check-secrets.mjs`, which blocks Google client secrets, access tokens, refresh tokens, API keys, and private keys.
+- Anything written to disk in plaintext should be treated as compromised if it leaks — rotate in Cloud Console rather than just deleting the file.
+
 ## Evaluation
 
-The `evaluation.xml` file contains 10 verified questions testing multi-tool workflows against real Google Health data. Run evaluations with:
-
-```bash
-pip install anthropic mcp
-
-python scripts/evaluation.py \
-  -t stdio \
-  -c node \
-  -a dist/index.js \
-  -e GOOGLE_HEALTH_ACCESS_TOKEN=ya29.your-token \
-  evaluation.xml
-```
+`evaluation.xml` contains 10 verified questions testing multi-tool workflows against real Google Health data. It is a fixture for an external harness; no runner is bundled with this repo.
 
 ## API Notes
 
 - The Google Health API is the successor to the Fitbit Web API, rebuilt on Google infrastructure
 - Data comes from Fitbit devices, Pixel Watch, and third-party apps via Health Connect
 - The `dailyRollUp` endpoint uses civil time (date objects), while `rollUp` uses physical time (ISO 8601 timestamps)
+- Roll-up ranges are closed-open: `end_date` is exclusive
 - Not all data types support all operations. The API returns an error listing supported actions if you try an unsupported one
 - Rate limits apply. The server returns actionable error messages when limits are hit
 
