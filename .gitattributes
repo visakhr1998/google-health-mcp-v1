@@ -1,0 +1,5 @@
+# Shell scripts must keep LF endings. A CRLF shebang fails on macOS/Linux with
+# "bad interpreter", which would silently disable the pre-commit secret guard
+# for anyone who clones on a non-Windows machine.
+.githooks/* text eol=lf
+*.sh text eol=lf

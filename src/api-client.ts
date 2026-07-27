@@ -1,11 +1,7 @@
 import axios, { AxiosError } from "axios";
-import { API_BASE_URL } from "./constants.js";
-
-let accessToken: string | undefined = process.env.GOOGLE_HEALTH_ACCESS_TOKEN;
-
-export function setAccessToken(token: string): void {
-  accessToken = token;
-}
+import { API_BASE_URL, ALL_SCOPES } from "./constants.js";
+import { getValidAccessToken, currentTokens, isInvalidGrant } from "./auth/client.js";
+import { missingScopes } from "./auth/store.js";
 
 export async function makeApiRequest<T>(
   path: string,
@@ -13,17 +9,10 @@ export async function makeApiRequest<T>(
   data?: unknown,
   params?: Record<string, string | number | boolean | undefined>
 ): Promise<T> {
-  const token = accessToken;
-  if (!token) {
-    throw new Error(
-      "No access token configured. Set GOOGLE_HEALTH_ACCESS_TOKEN environment variable or use the googlehealth_set_token tool."
-    );
-  }
+  const token = await getValidAccessToken();
 
   const cleanParams = params
-    ? Object.fromEntries(
-        Object.entries(params).filter(([, v]) => v !== undefined)
-      )
+    ? Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined))
     : undefined;
 
   const response = await axios({
@@ -41,7 +30,19 @@ export async function makeApiRequest<T>(
   return response.data as T;
 }
 
+/** Scopes this account never granted — the usual explanation for a 403. */
+function ungrantedScopeHint(): string {
+  const absent = missingScopes(currentTokens()?.scopes, [...ALL_SCOPES]);
+  if (absent.length === 0) return " All known scopes are granted, so this data type may not be available for your account.";
+  const names = absent.map((s) => s.replace("https://www.googleapis.com/auth/googlehealth.", ""));
+  return ` Your token does not grant: ${names.join(", ")}. Run \`npm run auth\` to re-consent.`;
+}
+
 export function handleApiError(error: unknown): string {
+  if (isInvalidGrant(error)) {
+    return "Error: Google rejected the stored refresh token (invalid_grant). Run `npm run auth` to sign in again.";
+  }
+
   if (error instanceof AxiosError) {
     if (error.response) {
       const status = error.response.status;
@@ -53,9 +54,9 @@ export function handleApiError(error: unknown): string {
         case 400:
           return `Error: Bad request${detail}. Check your parameters.`;
         case 401:
-          return `Error: Unauthorized${detail}. Your access token may be expired — use googlehealth_set_token to set a fresh one.`;
+          return `Error: Unauthorized${detail}. The access token was rejected; it will be refreshed on the next call. If this repeats, run \`npm run auth\`.`;
         case 403:
-          return `Error: Forbidden${detail}. Check that the required OAuth scope is granted.`;
+          return `Error: Forbidden${detail}.${ungrantedScopeHint()}`;
         case 404:
           return `Error: Resource not found${detail}. Check the data type or resource ID.`;
         case 429:

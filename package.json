@@ -11,7 +11,11 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist",
+    "auth": "npm run build && node dist/cli/login.js",
+    "auth:status": "npm run build && node dist/cli/status.js",
+    "test": "node --import tsx --test src/constants.test.ts src/formatters.test.ts src/api-client.test.ts src/tools/shared.test.ts src/auth/store.test.ts",
+    "check-secrets": "node scripts/check-secrets.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -19,6 +23,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.1",
     "axios": "^1.7.9",
+    "google-auth-library": "^9.0.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
