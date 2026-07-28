@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { AddressInfo } from "node:net";
 import { OAuth2Client, CodeChallengeMethod } from "google-auth-library";
 import { ALL_SCOPES } from "../constants.js";
-import { TokenFile, loadDotEnv } from "./store.js";
+import { TokenFile, loadDotEnv, warnIfShadowedEnv } from "./store.js";
 
 const LOGIN_TIMEOUT_MS = 120_000;
 
@@ -53,7 +53,7 @@ export interface LoginResult {
 export async function runLoginFlow(
   log: (msg: string) => void = (m) => console.error(m)
 ): Promise<LoginResult> {
-  loadDotEnv();
+  warnIfShadowedEnv(loadDotEnv());
 
   const clientId = process.env.GOOGLE_HEALTH_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_HEALTH_CLIENT_SECRET;

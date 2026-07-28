@@ -23,13 +23,28 @@ export function getTokenPath(): string {
   return process.env.GOOGLE_HEALTH_TOKEN_PATH || join(PROJECT_ROOT, "token.json");
 }
 
+export interface DotEnvResult {
+  /** Keys the file supplied because nothing was already set. */
+  applied: string[];
+  /**
+   * Keys the file declares but a pre-existing environment variable overrode
+   * with a *different* value. An identical value is not reported — only a
+   * genuine conflict is worth anyone's attention.
+   */
+  shadowed: Array<{ key: string; fileValue: string; envValue: string }>;
+}
+
 /**
  * Minimal .env loader. Node 20.11 predates `process.loadEnvFile`, and the MCP
  * client launches us as a bare `node dist/index.js`, so we cannot rely on
- * `--env-file` either. Existing environment variables always win.
+ * `--env-file` either. Existing environment variables always win, which is
+ * standard .env behaviour — see `warnIfShadowedEnv` for why that deserves a
+ * warning rather than silence.
  */
-export function loadDotEnv(path = join(PROJECT_ROOT, ".env")): void {
-  if (!existsSync(path)) return;
+export function loadDotEnv(path = join(PROJECT_ROOT, ".env")): DotEnvResult {
+  const result: DotEnvResult = { applied: [], shadowed: [] };
+  if (!existsSync(path)) return result;
+
   for (const raw of readFileSync(path, "utf-8").split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
@@ -43,8 +58,60 @@ export function loadDotEnv(path = join(PROJECT_ROOT, ".env")): void {
     ) {
       value = value.slice(1, -1);
     }
-    if (key && process.env[key] === undefined) process.env[key] = value;
+    if (!key) continue;
+
+    const existing = process.env[key];
+    if (existing === undefined) {
+      process.env[key] = value;
+      result.applied.push(key);
+    } else if (value !== "" && existing !== value) {
+      // A blank placeholder in .env is not a conflict, it is an unfilled field.
+      result.shadowed.push({ key, fileValue: value, envValue: existing });
+    }
   }
+  return result;
+}
+
+let shadowWarningEmitted = false;
+
+/** Client IDs are public identifiers; everything else here is a secret. */
+function describeConflict(key: string, fileValue: string, envValue: string): string {
+  if (!key.endsWith("CLIENT_ID")) {
+    return `  ${key}: environment value differs from .env (values hidden)`;
+  }
+  const short = (v: string) => (v.length > 24 ? `${v.slice(0, 24)}...` : v);
+  return `  ${key}: using "${short(envValue)}" from the environment, .env declares "${short(fileValue)}"`;
+}
+
+/**
+ * Warn when the environment silently overrides .env with different values.
+ *
+ * This is the failure that is hardest to diagnose from the symptom: a stale
+ * persistent variable pointing at a retired OAuth client shadows a correct
+ * .env, and the only visible effect is invalid_grant with no explanation.
+ *
+ * Writes to stderr (stdout carries the JSON-RPC stream) and only once per
+ * process, so the server does not repeat it on every refresh.
+ */
+export function warnIfShadowedEnv(result: DotEnvResult): void {
+  if (shadowWarningEmitted || result.shadowed.length === 0) return;
+  shadowWarningEmitted = true;
+
+  console.error(
+    [
+      "Warning: environment variables are overriding .env with different values:",
+      ...result.shadowed.map((s) => describeConflict(s.key, s.fileValue, s.envValue)),
+      "The environment wins, which is standard .env behaviour. If these are stale",
+      "leftovers, clear them and restart your terminal — on Windows:",
+      "  [Environment]::SetEnvironmentVariable('NAME', $null, 'User')",
+      "  export -n NAME        # macOS/Linux, plus remove it from your shell profile",
+    ].join("\n")
+  );
+}
+
+/** Test seam — allows the once-per-process warning to fire again. */
+export function resetShadowWarning(): void {
+  shadowWarningEmitted = false;
 }
 
 export async function loadTokens(): Promise<TokenFile | null> {
