@@ -15,6 +15,7 @@
     "auth": "npm run build && node dist/cli/login.js",
     "auth:status": "npm run build && node dist/cli/status.js",
     "test": "node --import tsx --test src/constants.test.ts src/formatters.test.ts src/api-client.test.ts src/tools/shared.test.ts src/auth/store.test.ts",
+    "test:live": "npm run build && node --import tsx --test src/live.test.ts",
     "check-secrets": "node scripts/check-secrets.mjs"
   },
   "engines": {

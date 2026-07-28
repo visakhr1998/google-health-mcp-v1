@@ -116,9 +116,28 @@ The area with the most history of breaking. All hermetic, using a stub token end
 - the auth URL carries `code_challenge_method=S256`, `access_type=offline`, `prompt=consent`
 - the HTTP server is closed on every path, including timeout — a leaked listener would hang the process
 
-## Tier 5 — Live end-to-end
+## Tier 5 — Live end-to-end — IMPLEMENTED
 
-Requires a real account and a working token, so it is gated behind an env var and never blocks CI.
+`src/live.test.ts`, 11 tests, run with:
+
+```bash
+GOOGLE_HEALTH_LIVE_TESTS=1 npm run test:live
+```
+
+Gated behind that variable and never part of `npm test` or CI, since it needs a real account and network. Without it, all 11 report as skipped rather than failing.
+
+It drives the actual MCP stdio protocol against `dist/index.js` — a real subprocess, real JSON-RPC, real API — so it covers the protocol contract and the stdout-purity guard from tier 3 as a side effect. Every stdout line is `JSON.parse`d by the reader, so a stray `console.log` fails the run.
+
+**Confirmed API shapes** (all previously undocumented, and all easy to guess wrong):
+
+| Field | Reality |
+|---|---|
+| Settings timezone | `timeZone`, not `timezone` |
+| Rollup step total | `steps.countSum`, and it is a **string** |
+| Rollup bucket order | **descending** by date |
+| Rollup range | closed-open — `end_date` is exclusive |
+
+Requires a signed-in `token.json` (`npm run auth`). The expectations below come from `evaluation.xml`.
 
 **`evaluation.xml` already contains the oracle** — 10 questions with verified answers. Rather than needing an LLM harness, convert each into a direct API assertion. For example:
 
@@ -133,7 +152,7 @@ Requires a real account and a working token, so it is gated behind an env var an
 
 These are deterministic against a fixed historical account, so they make a genuine regression suite for API-shape changes — which is exactly what a version bump on Google's side would break.
 
-Run as `npm run test:live`, skipped unless `GOOGLE_HEALTH_LIVE_TESTS=1`.
+Still worth adding: the remaining `evaluation.xml` answers not yet asserted — deep sleep minutes (77), weight before 2026-06-01 (65600 g), distinct exercise types (2), and the resting-heart-rate to oxygen-saturation cross-lookup (96.5).
 
 ## The `invalid_grant` canary
 
@@ -178,12 +197,12 @@ Capture one real response per data-type *shape* (not per data type — there are
 
 ## Suggested order
 
-1. The two testability seams (adapter, login injection) — unblocks everything
-2. Tier 4 auth tests — highest risk, most history of breaking
-3. Tier 3 protocol tests, including the stdout guard — cheap, catches whole classes of defect
-4. Tier 2 HTTP tests
-5. Tier 1 gap-filling
-6. Tier 5 live suite from `evaluation.xml`, once a valid credential exists
+1. ~~Tier 5 live suite from `evaluation.xml`~~ — **done**, 11 tests passing
+2. The two testability seams (adapter, login injection) — unblocks everything below
+3. Tier 4 auth tests — highest risk, most history of breaking
+4. Tier 3 protocol tests — partly covered by tier 5 already, including the stdout guard
+5. Tier 2 HTTP tests
+6. Tier 1 gap-filling
 7. The canary, after the Cloud Console fix lands
 
-Steps 1–3 are the bulk of the value and are roughly a day's work.
+Steps 2–4 are the bulk of the remaining value and are roughly a day's work.
