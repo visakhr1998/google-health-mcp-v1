@@ -4,9 +4,9 @@ import { randomBytes } from "node:crypto";
 import { AddressInfo } from "node:net";
 import { OAuth2Client, CodeChallengeMethod } from "google-auth-library";
 import { ALL_SCOPES } from "../constants.js";
-import { TokenFile, loadDotEnv } from "./store.js";
+import { TokenFile, loadDotEnv, warnIfShadowedEnv } from "./store.js";
 
-const LOGIN_TIMEOUT_MS = 120_000;
+const LOGIN_TIMEOUT_MS = Number(process.env.GOOGLE_HEALTH_AUTH_TIMEOUT_MS) || 120_000;
 
 const DONE_PAGE = `<!doctype html><meta charset="utf-8">
 <title>Signed in</title>
@@ -20,15 +20,27 @@ const FAIL_PAGE = `<!doctype html><meta charset="utf-8">
 div{text-align:center}h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#666;margin:0}</style>
 <div><h1>Sign-in failed</h1><p>Check the terminal for details.</p></div>`;
 
+/**
+ * Command that opens a URL in the platform's default browser.
+ *
+ * Windows deliberately avoids `cmd /c start`. cmd.exe treats `&` as a command
+ * separator, so an OAuth URL — which is almost entirely `&`-joined parameters —
+ * arrives truncated after the first one, and Google rejects it with
+ * "Required parameter is missing: response_type". explorer.exe is spawned
+ * directly with no shell in between, so the URL survives as one argument.
+ *
+ * Exported for testing.
+ */
+export function browserCommand(platform: NodeJS.Platform, url: string): [string, string[]] {
+  if (platform === "win32") return ["explorer.exe", [url]];
+  if (platform === "darwin") return ["open", [url]];
+  return ["xdg-open", [url]];
+}
+
 function openBrowser(url: string): void {
   try {
-    const [cmd, args] =
-      process.platform === "win32"
-        ? ["cmd", ["/c", "start", "", url]]
-        : process.platform === "darwin"
-          ? ["open", [url]]
-          : ["xdg-open", [url]];
-    spawn(cmd, args as string[], { detached: true, stdio: "ignore" }).unref();
+    const [cmd, args] = browserCommand(process.platform, url);
+    spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
   } catch {
     // Headless or locked-down environment — the printed URL is the fallback.
   }
@@ -53,7 +65,7 @@ export interface LoginResult {
 export async function runLoginFlow(
   log: (msg: string) => void = (m) => console.error(m)
 ): Promise<LoginResult> {
-  loadDotEnv();
+  warnIfShadowedEnv(loadDotEnv());
 
   const clientId = process.env.GOOGLE_HEALTH_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_HEALTH_CLIENT_SECRET;

@@ -6,14 +6,20 @@
 process.env.GOOGLE_HEALTH_AUTO_REAUTH = "0";
 
 import { REQUIRED_SCOPES } from "../constants.js";
-import { getTokenPath, loadTokens, loadDotEnv, missingScopes } from "../auth/store.js";
+import {
+  getTokenPath,
+  loadTokens,
+  loadDotEnv,
+  warnIfShadowedEnv,
+  missingScopes,
+} from "../auth/store.js";
 import { getValidAccessToken, isInvalidGrant } from "../auth/client.js";
 
 const DAY_MS = 86_400_000;
 const fmtAge = (ms: number) => `${(ms / DAY_MS).toFixed(1)} days`;
 
 async function main(): Promise<void> {
-  loadDotEnv();
+  warnIfShadowedEnv(loadDotEnv());
   const path = getTokenPath();
   console.log(`Token file:  ${path}`);
 

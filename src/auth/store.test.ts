@@ -11,6 +11,8 @@ import {
   loadTokens,
   getTokenPath,
   loadDotEnv,
+  warnIfShadowedEnv,
+  resetShadowWarning,
 } from "./store.js";
 
 const base: TokenFile = {
@@ -137,5 +139,116 @@ test("loadDotEnv parses pairs, strips quotes, and never overrides the environmen
 });
 
 test("loadDotEnv is a no-op when the file is absent", () => {
-  loadDotEnv(join(tmpdir(), "definitely-not-here", ".env"));
+  const result = loadDotEnv(join(tmpdir(), "definitely-not-here", ".env"));
+  assert.deepEqual(result, { applied: [], shadowed: [] });
+});
+
+async function withEnvFile(lines: string[], fn: (path: string) => void | Promise<void>) {
+  const dir = await mkdtemp(join(tmpdir(), "gh-env-"));
+  const path = join(dir, ".env");
+  await writeFile(path, lines.join("\n"));
+  try {
+    await fn(path);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+// The failure this guards: a stale persistent environment variable pointing at
+// a retired OAuth client shadows a correct .env, and the only visible symptom
+// is invalid_grant with no explanation.
+test("loadDotEnv reports a shadowed key when the environment differs", async () => {
+  await withEnvFile(["GOOGLE_HEALTH_CLIENT_ID=from-file"], (path) => {
+    process.env.GOOGLE_HEALTH_CLIENT_ID = "from-environment";
+    try {
+      const result = loadDotEnv(path);
+      assert.deepEqual(result.applied, []);
+      assert.equal(result.shadowed.length, 1);
+      assert.deepEqual(result.shadowed[0], {
+        key: "GOOGLE_HEALTH_CLIENT_ID",
+        fileValue: "from-file",
+        envValue: "from-environment",
+      });
+    } finally {
+      delete process.env.GOOGLE_HEALTH_CLIENT_ID;
+    }
+  });
+});
+
+test("loadDotEnv does not report a shadow when the values agree", async () => {
+  await withEnvFile(["SAME_VALUE=identical"], (path) => {
+    process.env.SAME_VALUE = "identical";
+    try {
+      assert.deepEqual(loadDotEnv(path).shadowed, []);
+    } finally {
+      delete process.env.SAME_VALUE;
+    }
+  });
+});
+
+test("loadDotEnv treats a blank placeholder as unfilled, not a conflict", async () => {
+  await withEnvFile(["BLANK_PLACEHOLDER="], (path) => {
+    process.env.BLANK_PLACEHOLDER = "something";
+    try {
+      assert.deepEqual(loadDotEnv(path).shadowed, []);
+    } finally {
+      delete process.env.BLANK_PLACEHOLDER;
+    }
+  });
+});
+
+test("loadDotEnv records keys it applied", async () => {
+  await withEnvFile(["FRESH_KEY=value"], (path) => {
+    try {
+      assert.deepEqual(loadDotEnv(path).applied, ["FRESH_KEY"]);
+    } finally {
+      delete process.env.FRESH_KEY;
+    }
+  });
+});
+
+test("warnIfShadowedEnv hides secrets but shows client IDs", () => {
+  resetShadowWarning();
+  const messages: string[] = [];
+  const original = console.error;
+  console.error = (m: string) => messages.push(m);
+  try {
+    warnIfShadowedEnv({
+      applied: [],
+      shadowed: [
+        { key: "GOOGLE_HEALTH_CLIENT_ID", fileValue: "new-id", envValue: "stale-id" },
+        { key: "GOOGLE_HEALTH_CLIENT_SECRET", fileValue: "NEWSECRET", envValue: "OLDSECRET" },
+      ],
+    });
+  } finally {
+    console.error = original;
+  }
+
+  const output = messages.join("\n");
+  assert.match(output, /stale-id/);
+  assert.match(output, /new-id/);
+  assert.match(output, /values hidden/);
+  assert.doesNotMatch(output, /OLDSECRET|NEWSECRET/);
+});
+
+test("warnIfShadowedEnv stays silent with nothing shadowed, and fires only once", () => {
+  resetShadowWarning();
+  let calls = 0;
+  const original = console.error;
+  console.error = () => calls++;
+  try {
+    warnIfShadowedEnv({ applied: [], shadowed: [] });
+    assert.equal(calls, 0, "no conflict should produce no output");
+
+    const conflict = {
+      applied: [],
+      shadowed: [{ key: "K", fileValue: "a", envValue: "b" }],
+    };
+    warnIfShadowedEnv(conflict);
+    warnIfShadowedEnv(conflict);
+    assert.equal(calls, 1, "repeat refreshes must not repeat the warning");
+  } finally {
+    console.error = original;
+    resetShadowWarning();
+  }
 });

@@ -4,6 +4,7 @@ import { runLoginFlow } from "./oauth.js";
 import {
   TokenFile,
   loadDotEnv,
+  warnIfShadowedEnv,
   loadTokens,
   saveTokens,
   mergeTokens,
@@ -68,7 +69,7 @@ async function reauthenticate(): Promise<void> {
 }
 
 async function loadCredentials(): Promise<TokenFile> {
-  loadDotEnv();
+  warnIfShadowedEnv(loadDotEnv());
   const stored = await loadTokens();
   const creds = stored ?? credentialsFromEnv();
 
