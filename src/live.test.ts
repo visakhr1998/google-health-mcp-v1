@@ -279,19 +279,49 @@ test("max_buckets caps the merged result and says so", { skip }, async () => {
   if (data.truncated) assert.equal(data.truncationInfo.reason, "max_buckets");
 });
 
-// Known upstream limitation, pinned so a future API fix is noticed rather than
-// silently changing behaviour. See the window_size_days issue.
-test("window_size_days above 1 is rejected upstream", { skip }, async () => {
-  const res = await probe.send("tools/call", {
-    name: "googlehealth_daily_rollup",
-    arguments: {
+// The upstream rule is pageSize*window <= 90 and rangeDays <= pageSize*window,
+// so a fixed page size of 90 asked for a 630-day page at window=7 and was
+// rejected. The page size is now derived from the bucket count per chunk.
+test("window_size_days above 1 works over a short range", { skip }, async () => {
+  for (const window of [2, 7, 14, 30]) {
+    const data = await probe.callJson("googlehealth_daily_rollup", {
       data_type: "steps",
       start_date: "2026-01-01",
       end_date: "2026-01-29",
-      window_size_days: 7,
-    },
+      window_size_days: window,
+    });
+    assert.ok(
+      Array.isArray(data.rollupDataPoints),
+      `window_size_days=${window} should return buckets`
+    );
+  }
+});
+
+test("window_size_days works over a range needing several chunks", { skip }, async () => {
+  // 364 days at 7-day buckets spans multiple 84-day chunks (the largest whole
+  // number of weekly buckets that fits the 90-day page span).
+  const data = await probe.callJson("googlehealth_daily_rollup", {
+    data_type: "steps",
+    start_date: "2026-01-01",
+    end_date: "2026-12-31",
+    window_size_days: 7,
   });
-  assert.equal(res.result.isError, true, "if this now passes, the upstream limitation is fixed");
+  assert.ok(Array.isArray(data.rollupDataPoints));
+
+  // Chunk boundaries must not split a bucket, so every start date should land
+  // on the same weekday offset from the range start.
+  const starts = (data.rollupDataPoints as any[])
+    .map((b) => b.civilStartTime?.date)
+    .filter(Boolean)
+    .map((d) => Date.UTC(d.year, d.month - 1, d.day));
+  const origin = Date.UTC(2026, 0, 1);
+  for (const start of starts) {
+    assert.equal(
+      Math.round((start - origin) / 86_400_000) % 7,
+      0,
+      "bucket boundaries must stay aligned across chunk edges"
+    );
+  }
 });
 
 test("stdout carried only JSON-RPC", { skip }, () => {
