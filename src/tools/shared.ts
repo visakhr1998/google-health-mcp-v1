@@ -19,13 +19,96 @@ export const READONLY_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
-/** Caps a response so a wide date range cannot blow the model's context. */
+/**
+ * Caps prose output. Only safe for markdown, where a trailing notice is just
+ * more prose — never for JSON, which this would leave unparseable. See
+ * `fitJson` for the structured equivalent.
+ */
 export function truncateIfNeeded(text: string): string {
   if (text.length <= CHARACTER_LIMIT) return text;
   return (
     text.slice(0, CHARACTER_LIMIT) +
     "\n\n--- Response truncated. Use pagination or narrower filters to see more. ---"
   );
+}
+
+/** Payload fields that hold the record array, in the order we look for them. */
+const RECORD_FIELDS = ["dataPoints", "rollupDataPoints"] as const;
+
+export type FitResult =
+  | { ok: true; text: string; truncated: boolean }
+  | { ok: false; message: string };
+
+function renderWithRecords(
+  payload: Record<string, unknown>,
+  field: string,
+  records: readonly unknown[],
+  keep: number
+): string {
+  return JSON.stringify(
+    {
+      ...payload,
+      [field]: records.slice(0, keep),
+      truncated: true,
+      truncationInfo: {
+        returnedRecords: keep,
+        omittedRecords: records.length - keep,
+        characterLimit: CHARACTER_LIMIT,
+        reason: "Response exceeded the character limit. Use page_token or a narrower filter.",
+      },
+    },
+    null,
+    2
+  );
+}
+
+/**
+ * Render a payload as JSON that always parses.
+ *
+ * Slicing a JSON string at a character limit produces a document that is
+ * neither valid JSON nor a structured error, and a client that treats an
+ * unparseable body as "no records" silently loses data. So instead of cutting
+ * mid-document, drop whole records until the result fits and say so in-band
+ * via `truncated` and `truncationInfo`.
+ *
+ * If not even one record fits, there is no valid subset to return — that is
+ * reported as an error rather than as an empty success.
+ */
+export function fitJson(data: unknown): FitResult {
+  const full = JSON.stringify(data, null, 2);
+  if (full.length <= CHARACTER_LIMIT) return { ok: true, text: full, truncated: false };
+
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const payload = data as Record<string, unknown>;
+    const field = RECORD_FIELDS.find((f) => Array.isArray(payload[f]));
+    if (field) {
+      const records = payload[field] as unknown[];
+      // Largest prefix of records that still fits, by binary search.
+      let low = 0;
+      let high = records.length;
+      let best = 0;
+      while (low <= high) {
+        const mid = Math.floor((low + high) / 2);
+        if (renderWithRecords(payload, field, records, mid).length <= CHARACTER_LIMIT) {
+          best = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      if (best > 0) {
+        return { ok: true, text: renderWithRecords(payload, field, records, best), truncated: true };
+      }
+    }
+  }
+
+  return {
+    ok: false,
+    message:
+      `Error: RESPONSE_TOO_LARGE. The response exceeds the ${CHARACTER_LIMIT}-character ` +
+      "limit and no valid subset could be returned. Narrow the query with a filter, a " +
+      "smaller date range, or a smaller page_size.",
+  };
 }
 
 /** Converts a throw into an error result rather than killing the tool call. */
@@ -42,7 +125,42 @@ export function textResult(text: string): ToolResult {
 }
 
 export function jsonResult(data: unknown): ToolResult {
-  return textResult(JSON.stringify(data, null, 2));
+  const fit = fitJson(data);
+  if (!fit.ok) return { content: [{ type: "text", text: fit.message }], isError: true };
+  return { content: [{ type: "text", text: fit.text }] };
+}
+
+/**
+ * Follow `nextPageToken` past empty pages.
+ *
+ * Upstream paging over sparse date ranges can return a page with no records
+ * that still carries a token, with data on later pages. "Empty means done" is
+ * the obvious client implementation and it silently truncates the walk, so the
+ * skipping happens here instead. Bounded, so a pathological range cannot spin.
+ */
+export async function fetchNonEmptyPage<T extends Record<string, unknown>>(
+  fetchPage: (pageToken?: string) => Promise<T>,
+  recordField: string,
+  startToken?: string,
+  maxHops = 50
+): Promise<T> {
+  let page = await fetchPage(startToken);
+  let hops = 0;
+
+  while (hops < maxHops) {
+    const records = page[recordField];
+    const isEmpty = Array.isArray(records) && records.length === 0;
+    const token = typeof page.nextPageToken === "string" ? page.nextPageToken : "";
+    if (!isEmpty || !token) break;
+    hops++;
+    page = await fetchPage(token);
+  }
+
+  // Skipping is best-effort: a long enough run of empty pages exhausts the hop
+  // budget and an empty page still surfaces. `hasMore` gives clients a signal
+  // that does not depend on emptiness, so correct pagination never rests on
+  // "empty means done".
+  return { ...page, hasMore: Boolean(page.nextPageToken) };
 }
 
 export const dataTypeEnum = z.enum(DATA_TYPES);
@@ -74,9 +192,9 @@ export function respond<T>(
   format: ResponseFormat,
   toMarkdown: (data: T) => string
 ): ToolResult {
-  return textResult(
-    format === ResponseFormat.MARKDOWN ? toMarkdown(data) : JSON.stringify(data, null, 2)
-  );
+  // Markdown is prose, so a trailing truncation notice is harmless. JSON goes
+  // through fitJson, which drops whole records rather than cutting the document.
+  return format === ResponseFormat.MARKDOWN ? textResult(toMarkdown(data)) : jsonResult(data);
 }
 
 /** Registers a no-input GET tool. These differ only by name, text, and path. */

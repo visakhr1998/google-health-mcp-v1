@@ -208,6 +208,92 @@ test("an invalid data type is rejected by the schema, not the API", { skip }, as
   assert.ok(failed, "an out-of-enum data_type must not reach the API");
 });
 
+// ── Issue #4: truncated output must still parse ──────────────────────────────
+test("an oversized response is still valid JSON", { skip }, async () => {
+  const text = await probe.callTool("googlehealth_list_data_points", {
+    data_type: "heart-rate",
+    page_size: 100,
+  });
+  const data = JSON.parse(text); // used to throw: document was sliced mid-string
+  assert.doesNotMatch(text, /--- Response truncated/, "prose marker must be gone");
+  if (data.truncated) {
+    assert.ok(data.truncationInfo.returnedRecords > 0);
+    assert.ok(data.truncationInfo.omittedRecords > 0);
+    assert.equal(data.truncationInfo.returnedRecords, data.dataPoints.length);
+  }
+});
+
+// ── Issue #5: pagination must not rest on "empty means done" ─────────────────
+test("paginated responses carry an authoritative hasMore flag", { skip }, async () => {
+  const data = await probe.callJson("googlehealth_list_data_points", {
+    data_type: "sleep",
+    page_size: 3,
+  });
+  assert.equal(typeof data.hasMore, "boolean");
+  assert.equal(data.hasMore, Boolean(data.nextPageToken));
+});
+
+test("walking by hasMore passes the point where empty-means-done stopped", { skip }, async () => {
+  let token: string | undefined;
+  let pages = 0;
+  let total = 0;
+  do {
+    const page = await probe.callJson("googlehealth_list_data_points", {
+      data_type: "sleep",
+      page_size: 3,
+      ...(token ? { page_token: token } : {}),
+    });
+    total += (page.dataPoints ?? []).length;
+    token = page.hasMore ? page.nextPageToken : undefined;
+    pages++;
+  } while (token && pages < 40);
+
+  // An early client stopped at 14 records by breaking on the first empty page.
+  assert.ok(total > 14, `expected more than 14 records, got ${total} over ${pages} pages`);
+});
+
+// ── Issue #6: range and page size are independent ────────────────────────────
+test("daily_rollup accepts ranges far longer than any page size", { skip }, async () => {
+  for (const days of [30, 90, 365]) {
+    const start = new Date(Date.UTC(2026, 0, 1));
+    const end = new Date(start.getTime() + days * 86_400_000);
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+    const data = await probe.callJson("googlehealth_daily_rollup", {
+      data_type: "steps",
+      start_date: iso(start),
+      end_date: iso(end),
+    });
+    assert.ok(Array.isArray(data.rollupDataPoints), `${days}-day range should return buckets`);
+  }
+});
+
+test("max_buckets caps the merged result and says so", { skip }, async () => {
+  const data = await probe.callJson("googlehealth_daily_rollup", {
+    data_type: "steps",
+    start_date: "2026-01-01",
+    end_date: "2026-12-31",
+    max_buckets: 5,
+  });
+  assert.ok(data.rollupDataPoints.length <= 5);
+  if (data.truncated) assert.equal(data.truncationInfo.reason, "max_buckets");
+});
+
+// Known upstream limitation, pinned so a future API fix is noticed rather than
+// silently changing behaviour. See the window_size_days issue.
+test("window_size_days above 1 is rejected upstream", { skip }, async () => {
+  const res = await probe.send("tools/call", {
+    name: "googlehealth_daily_rollup",
+    arguments: {
+      data_type: "steps",
+      start_date: "2026-01-01",
+      end_date: "2026-01-29",
+      window_size_days: 7,
+    },
+  });
+  assert.equal(res.result.isError, true, "if this now passes, the upstream limitation is fixed");
+});
+
 test("stdout carried only JSON-RPC", { skip }, () => {
   // Every stdout line was JSON.parse'd in the reader above; a stray
   // console.log would have thrown before reaching here.

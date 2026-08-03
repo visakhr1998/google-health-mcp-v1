@@ -6,6 +6,7 @@ import {
   READONLY_ANNOTATIONS,
   ResponseFormat,
   dataTypeEnum,
+  fetchNonEmptyPage,
   jsonResult,
   paginationSchema,
   respond,
@@ -50,11 +51,17 @@ function registerQueryTool(
     },
     async ({ data_type, filter, page_size, page_token, response_format }) =>
       safeTool(async () => {
-        const data = await makeApiRequest<Record<string, unknown>>(
-          `users/me/dataTypes/${data_type}/dataPoints${options.pathSuffix}`,
-          "GET",
-          undefined,
-          { filter, pageSize: page_size, pageToken: page_token }
+        // Skips empty-but-tokened pages, which upstream emits over sparse ranges.
+        const data = await fetchNonEmptyPage(
+          (pageToken) =>
+            makeApiRequest<Record<string, unknown>>(
+              `users/me/dataTypes/${data_type}/dataPoints${options.pathSuffix}`,
+              "GET",
+              undefined,
+              { filter, pageSize: page_size, pageToken }
+            ),
+          "dataPoints",
+          page_token
         );
         return respond(data, response_format as ResponseFormat, (d) =>
           formatDataPoints(d, options.label(data_type))
@@ -77,7 +84,9 @@ export function registerDataPointTools(server: McpServer): void {
       '  - filter: \'data_type.interval.start_time >= "2025-01-01T00:00:00Z"\'\n' +
       '  - filter: \'data_type.interval.start_time >= "2025-01-01T00:00:00Z" AND data_type.interval.end_time <= "2025-01-31T23:59:59Z"\'\n\n' +
       "Note: use kebab-case for data_type param but snake_case for data type names inside filter expressions.\n\n" +
-      "Returns: { dataPoints: [...], nextPageToken? }\n\n" +
+      "Returns: { dataPoints: [...], nextPageToken?, hasMore }\n" +
+      "Pagination: continue while hasMore is true. Do NOT stop on an empty dataPoints array — upstream paging over sparse ranges can return an empty page that still has more data after it. The server skips most of these, but only hasMore is authoritative.\n" +
+      "If the result is too large it is trimmed to whole records and marked truncated:true with truncationInfo; the JSON always parses.\n\n" +
       "Required scope: depends on data type category (activity_and_fitness, health_metrics_and_measurements, sleep, nutrition).",
   });
 
