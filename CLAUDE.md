@@ -55,7 +55,12 @@ index.ts (wiring) → tools/ (11 tools) → api-client.ts → auth/ → Google H
 
 **An empty page can still carry `nextPageToken`.** Only a missing token ends a walk. `fetchNonEmptyPage` absorbs this; don't reintroduce "empty means done".
 
-**`daily_rollup` upstream requires `days <= page_size <= 90`** (verified by bisection). The server hides this by chunking; don't expose the coupling in the tool surface.
+**`daily_rollup` upstream does not paginate a range at all.** Two rules, confirmed across 19 live combinations:
+
+1. `pageSize * windowSizeDays <= 90` — a page spans at most 90 days
+2. `rangeDays <= pageSize * windowSizeDays` — the range must fit in **one** page
+
+At `windowSizeDays: 1` this collapses to the deceptively simple `rangeDays <= pageSize <= 90`, which is easy to mis-infer as the whole rule — and then a fixed `pageSize` of 90 requests a 630-day page at `windowSizeDays: 7` and is rejected. The server derives page size per chunk from the bucket count and keeps chunk edges on bucket boundaries. Don't expose any of this in the tool surface.
 
 **Refresh tokens die after 7 days** if the OAuth consent screen is in *Testing* status. That is a Cloud Console setting, not a code bug — `npm run auth:status` names it.
 

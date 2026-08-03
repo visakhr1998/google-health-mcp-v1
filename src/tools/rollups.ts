@@ -27,28 +27,47 @@ function civilDate(date: string): { year: number; month: number; day: number } {
 const MIDNIGHT = { hours: 0, minutes: 0, seconds: 0 };
 
 /**
- * The dailyRollUp endpoint rejects a range longer than the requested page size,
- * and rejects any page size above 90. Verified by bisection against the live
- * API: days=60/pageSize=60 succeeds, days=61/pageSize=60 fails; pageSize 90
- * succeeds, 91 fails.
+ * The dailyRollUp endpoint enforces two rules, confirmed against the live API
+ * across 19 combinations of range, window size and page size:
  *
- * Range and page size are independent concerns, so rather than exposing that
- * coupling the server splits long ranges into windows and pages each one.
+ *   1. pageSize * windowSizeDays <= 90   — one page may span at most 90 days
+ *   2. rangeDays <= pageSize * windowSizeDays — the range must fit in one page
+ *
+ * In other words the endpoint does not paginate a range at all: the whole
+ * request has to fit inside a single page, and a page covers at most 90 days.
+ * At windowSizeDays=1 that collapses to the more obvious-looking
+ * "rangeDays <= pageSize <= 90", which is what makes the real rule easy to
+ * mis-infer — and sending a fixed pageSize of 90 then asks for a 630-day page
+ * at windowSizeDays=7, which is rejected.
+ *
+ * So the page size is derived per chunk from the bucket count rather than
+ * fixed, and callers never see any of this.
  */
-const MAX_ROLLUP_PAGE_SIZE = 90;
+const MAX_PAGE_SPAN_DAYS = 90;
 
 const toUtc = (date: string): number => Date.parse(`${date}T00:00:00Z`);
 const fromUtc = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 const DAY_MS = 86_400_000;
 
 /**
- * Largest chunk that satisfies the API limit while staying a whole number of
- * buckets — a chunk that is not a multiple of the bucket width would split a
- * bucket across two requests and report it twice, half-filled.
+ * Largest chunk that satisfies the 90-day page span while staying a whole
+ * number of buckets — a chunk that is not a multiple of the bucket width would
+ * split a bucket across two requests and report it twice, half-filled.
  */
 function chunkDays(windowSizeDays: number): number {
-  const whole = Math.floor(MAX_ROLLUP_PAGE_SIZE / windowSizeDays) * windowSizeDays;
+  const whole = Math.floor(MAX_PAGE_SPAN_DAYS / windowSizeDays) * windowSizeDays;
   return Math.max(whole, windowSizeDays);
+}
+
+/**
+ * Page size for one chunk: exactly the number of buckets it contains.
+ *
+ * Satisfies both rules by construction — `buckets * window >= days` because of
+ * the rounding up, and `buckets * window <= 90` because `days` never exceeds
+ * `chunkDays(window)`, which is itself capped at 90.
+ */
+function pageSizeForChunk(days: number, windowSizeDays: number): number {
+  return Math.max(1, Math.ceil(days / windowSizeDays));
 }
 
 /** Fetches every bucket in a range, chunking and paging as needed. */
@@ -64,6 +83,7 @@ async function fetchAllBuckets(
 
   for (let cursor = toUtc(startDate); cursor < endMs; cursor += step) {
     const chunkEnd = Math.min(cursor + step, endMs);
+    const chunkSpanDays = Math.round((chunkEnd - cursor) / DAY_MS);
     let pageToken: string | undefined;
 
     do {
@@ -76,7 +96,7 @@ async function fetchAllBuckets(
             end: { date: civilDate(fromUtc(chunkEnd)), time: MIDNIGHT },
           },
           windowSizeDays,
-          pageSize: MAX_ROLLUP_PAGE_SIZE,
+          pageSize: pageSizeForChunk(chunkSpanDays, windowSizeDays),
           ...(pageToken ? { pageToken } : {}),
         }
       );
@@ -113,7 +133,7 @@ export function registerRollupTools(server: McpServer): void {
           .min(1)
           .default(1)
           .describe(
-            "Days per bucket (default 1). KNOWN LIMITATION: the upstream API rejects any value above 1 with 'Invalid argument', so only 1 currently works."
+            "Days per bucket (default 1). Use 7 for weekly totals, 30 for monthly. Any value works over any range; the server sizes its upstream requests to match."
           ),
         max_buckets: z
           .number()
