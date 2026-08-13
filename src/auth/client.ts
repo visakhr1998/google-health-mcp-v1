@@ -1,5 +1,5 @@
 import { OAuth2Client } from "google-auth-library";
-import { REQUIRED_SCOPES } from "../constants.js";
+import { OAUTH_REQUEST_TIMEOUT_MS, REQUIRED_SCOPES } from "../constants.js";
 import { runLoginFlow } from "./oauth.js";
 import {
   TokenFile,
@@ -97,7 +97,13 @@ async function getClient(): Promise<OAuth2Client> {
 
   current = await loadCredentials();
 
-  const c = new OAuth2Client(current.client_id, current.client_secret);
+  const c = new OAuth2Client({
+    clientId: current.client_id,
+    clientSecret: current.client_secret,
+    // Without this, a hung refresh call blocks forever — and since refreshes
+    // are single-flighted (refreshInFlight below), that stalls every tool call.
+    transporterOptions: { timeout: OAUTH_REQUEST_TIMEOUT_MS },
+  });
   c.setCredentials({
     refresh_token: current.refresh_token,
     access_token: current.access_token,

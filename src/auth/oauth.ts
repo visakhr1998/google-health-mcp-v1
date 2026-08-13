@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { AddressInfo } from "node:net";
 import { OAuth2Client, CodeChallengeMethod } from "google-auth-library";
-import { ALL_SCOPES } from "../constants.js";
+import { ALL_SCOPES, OAUTH_REQUEST_TIMEOUT_MS } from "../constants.js";
 import { TokenFile, loadDotEnv, warnIfShadowedEnv } from "./store.js";
 
 const LOGIN_TIMEOUT_MS = Number(process.env.GOOGLE_HEALTH_AUTH_TIMEOUT_MS) || 120_000;
@@ -92,7 +92,15 @@ export async function runLoginFlow(
 
   const actualPort = (server.address() as AddressInfo).port;
   const redirectUri = `http://127.0.0.1:${actualPort}`;
-  const client = new OAuth2Client({ clientId, clientSecret, redirectUri });
+  const client = new OAuth2Client({
+    clientId,
+    clientSecret,
+    redirectUri,
+    // The loopback callback wait has its own timeout (LOGIN_TIMEOUT_MS), but
+    // once that resolves the code-exchange call below is unguarded — without
+    // this, a hung request to the token endpoint hangs the login forever.
+    transporterOptions: { timeout: OAUTH_REQUEST_TIMEOUT_MS },
+  });
 
   const { codeVerifier, codeChallenge } = await client.generateCodeVerifierAsync();
   const state = randomBytes(24).toString("hex");
