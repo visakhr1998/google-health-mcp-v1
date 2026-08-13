@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.js.map
 *.d.ts.map
+CLAUDE.md
 
 # Secrets — never commit. See .env.example and `npm run auth`.
 .env
