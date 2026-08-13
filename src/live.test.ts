@@ -226,6 +226,41 @@ test("filter is rejected for exercise, not just unsupported syntax", { skip }, a
   assert.match(res.result.content[0].text, /INVALID_DATA_POINT_FILTER_DATA_TYPE_MEMBER/);
 });
 
+// Issue #20: `exercise`'s nextPageToken is only resumable when the page_size
+// that produced it was 25 or more. Below that, the token looks ordinary but
+// the next call rejects it — confirmed live, not fixable on our side since
+// makeApiRequest passes page_size straight through. Pinned here so a future
+// change to the upstream API (in either direction) gets caught.
+test("exercise page tokens under page_size 25 are not resumable", { skip }, async () => {
+  const first = await probe.callJson("googlehealth_list_data_points", {
+    data_type: "exercise",
+    page_size: 6,
+  });
+  assert.ok(first.nextPageToken, "a token should still come back below the floor");
+
+  const res = await probe.send("tools/call", {
+    name: "googlehealth_list_data_points",
+    arguments: { data_type: "exercise", page_size: 6, page_token: first.nextPageToken },
+  });
+  assert.equal(res.result?.isError, true, "the token from a sub-25 page should not be resumable");
+  assert.match(res.result.content[0].text, /Invalid page token/);
+});
+
+test("exercise page tokens at page_size 25+ are resumable", { skip }, async () => {
+  const first = await probe.callJson("googlehealth_list_data_points", {
+    data_type: "exercise",
+    page_size: 25,
+  });
+  assert.ok(first.nextPageToken, "expected a token — the account has more than 25 exercise points");
+
+  const second = await probe.callJson("googlehealth_list_data_points", {
+    data_type: "exercise",
+    page_size: 25,
+    page_token: first.nextPageToken,
+  });
+  assert.ok(Array.isArray(second.dataPoints), "the token should resolve to a real next page");
+});
+
 test("an invalid data type is rejected by the schema, not the API", { skip }, async () => {
   const res = await probe.send("tools/call", {
     name: "googlehealth_daily_rollup",

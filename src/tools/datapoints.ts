@@ -24,6 +24,14 @@ import {
  * ask for that subtype, so the only correct move is to pull a wide window in
  * one call and inspect each result itself — not to guess narrower filters or
  * re-query on a hunch.
+ *
+ * `exercise` also has an undocumented pagination floor, confirmed live
+ * (issue #20): its nextPageToken is only resumable when page_size was 25 or
+ * more on the call that produced it. Below that, the token still comes back
+ * — and looks like an ordinary token — but the very next call rejects it
+ * with "Invalid page token", stranding the walk. This is upstream behavior;
+ * makeApiRequest passes page_size straight through with no rewriting, so
+ * there is nothing to fix on our side beyond warning about it.
  */
 const SEARCH_TOOL_GUIDANCE =
   WIDE_WINDOW_GUIDANCE +
@@ -31,7 +39,9 @@ const SEARCH_TOOL_GUIDANCE =
   "or any other field, and some data types (e.g. exercise) reject filter entirely. To find " +
   "something specific, pull the wide window in one call and inspect each result's fields " +
   "yourself. When pulling a wide window, also raise page_size toward its max (100) rather " +
-  "than paging through it in small steps." +
+  "than paging through it in small steps. For data_type 'exercise' specifically, keep " +
+  "page_size at 25 or higher if you expect to page through results — smaller values return " +
+  "a page fine but hand back a token that the next call will reject." +
   TRUNCATION_CAUTION;
 
 /**
