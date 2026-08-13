@@ -1,6 +1,14 @@
 export const API_BASE_URL = "https://health.googleapis.com/v4";
 export const CHARACTER_LIMIT = 25000;
 
+/**
+ * Timeout for requests to Google's OAuth token endpoint (refresh and code
+ * exchange). Neither google-auth-library nor its gaxios transport sets a
+ * default, so without this a hung network call blocks forever — same failure
+ * mode makeApiRequest already guards against with its own 30s axios timeout.
+ */
+export const OAUTH_REQUEST_TIMEOUT_MS = 30_000;
+
 const SCOPE_PREFIX = "https://www.googleapis.com/auth/googlehealth";
 
 /**
