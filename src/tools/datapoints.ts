@@ -17,19 +17,21 @@ import {
 } from "./shared.js";
 
 /**
- * `filter` only matches on time range; it cannot select by exercise subtype,
- * activity name, or any other field. A model searching for something
- * specific (e.g. "my last run" among mixed exercise entries) has no
- * server-side way to ask for that subtype, so the only correct move is to
- * pull a wide window in one call and inspect each result itself — not to
- * guess narrower filters or re-query on a hunch.
+ * `filter` only ever matches on time range — never on subtype, activity name,
+ * or any other field — and some data types (confirmed: `exercise`) reject it
+ * outright regardless of syntax. A model searching for something specific
+ * (e.g. "my last run" among mixed exercise entries) has no server-side way to
+ * ask for that subtype, so the only correct move is to pull a wide window in
+ * one call and inspect each result itself — not to guess narrower filters or
+ * re-query on a hunch.
  */
 const SEARCH_TOOL_GUIDANCE =
   WIDE_WINDOW_GUIDANCE +
-  " `filter` only matches on time range — it cannot select by exercise subtype, activity " +
-  "name, or any other field. To find something specific, pull the wide window in one call " +
-  "and inspect each result's fields yourself. When pulling a wide window, also raise " +
-  "page_size toward its max (100) rather than paging through it in small steps." +
+  " `filter` only ever matches on time range — it cannot select by subtype, activity name, " +
+  "or any other field, and some data types (e.g. exercise) reject filter entirely. To find " +
+  "something specific, pull the wide window in one call and inspect each result's fields " +
+  "yourself. When pulling a wide window, also raise page_size toward its max (100) rather " +
+  "than paging through it in small steps." +
   TRUNCATION_CAUTION;
 
 /**
@@ -59,8 +61,13 @@ function registerQueryTool(
           .string()
           .optional()
           .describe(
-            "Filter expression for time range. Use snake_case for data type names in filters. " +
-              'Example: \'data_type.interval.start_time >= "2025-06-01T00:00:00Z"\''
+            "Filter expression for time range. The field path must be prefixed with the " +
+              "actual data_type value, snake_cased — not the literal word 'data_type'. " +
+              "Example for data_type 'steps': 'steps.interval.start_time >= " +
+              '"2025-06-01T00:00:00Z"\'. For data_type \'heart-rate\', the prefix is ' +
+              "'heart_rate'. Not every data type accepts a filter — composite types like " +
+              "'exercise' reject it entirely (any field), regardless of syntax; omit filter " +
+              "and pull an unfiltered range for those instead."
           ),
         ...paginationSchema,
         response_format: responseFormatSchema,
@@ -98,10 +105,14 @@ export function registerDataPointTools(server: McpServer): void {
       "Query health and fitness data points for a specific data type. Supports filtering by time range and pagination.\n\n" +
       "Supported data types include: steps, heart-rate, sleep, exercise, weight, body-fat, blood-glucose, " +
       "active-minutes, distance, floors, total-calories, nutrition-log, and many more.\n\n" +
-      "Time filtering examples:\n" +
-      '  - filter: \'data_type.interval.start_time >= "2025-01-01T00:00:00Z"\'\n' +
-      '  - filter: \'data_type.interval.start_time >= "2025-01-01T00:00:00Z" AND data_type.interval.end_time <= "2025-01-31T23:59:59Z"\'\n\n' +
-      "Note: use kebab-case for data_type param but snake_case for data type names inside filter expressions.\n\n" +
+      "Time filtering examples (data_type 'steps' — swap in the actual data_type for other " +
+      "types):\n" +
+      '  - filter: \'steps.interval.start_time >= "2025-01-01T00:00:00Z"\'\n' +
+      '  - filter: \'steps.interval.start_time >= "2025-01-01T00:00:00Z" AND steps.interval.end_time <= "2025-01-31T23:59:59Z"\'\n\n' +
+      "Note: use kebab-case for the data_type param, but snake_case for the data type name " +
+      "as the filter's field prefix (e.g. data_type 'heart-rate' -> filter prefix " +
+      "'heart_rate'). Some data types reject filter entirely — see the filter parameter's " +
+      "own description.\n\n" +
       "Returns: { dataPoints: [...], nextPageToken?, hasMore }\n" +
       "Pagination: continue while hasMore is true. Do NOT stop on an empty dataPoints array — upstream paging over sparse ranges can return an empty page that still has more data after it. The server skips most of these, but only hasMore is authoritative.\n" +
       "If the result is too large it is trimmed to whole records and marked truncated:true with truncationInfo; the JSON always parses.\n\n" +
