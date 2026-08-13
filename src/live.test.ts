@@ -191,12 +191,39 @@ test("markdown response format renders headings", { skip }, async () => {
   assert.match(text, /^## 2026-06-\d{2} → 2026-06-\d{2}$/m);
 });
 
+// Issue #19: the field path must be prefixed with the actual data type name
+// (snake_case), not the literal word "data_type" the old docs showed — that
+// literal string was never valid and every previous version of this test
+// passed without ever exercising `filter` at all.
 test("list_data_points accepts a time filter", { skip }, async () => {
   const data = await probe.callJson("googlehealth_list_data_points", {
-    data_type: "weight",
+    data_type: "steps",
+    filter: 'steps.interval.start_time >= "2026-06-09T00:00:00Z"',
     page_size: 5,
   });
   assert.ok(Array.isArray(data.dataPoints), "expected a dataPoints array");
+  for (const point of data.dataPoints) {
+    assert.ok(
+      point.steps?.interval?.startTime >= "2026-06-09T00:00:00Z",
+      "every point should honour the filter, not just tolerate it"
+    );
+  }
+});
+
+// Issue #19: `exercise` rejects `filter` entirely, on any field, regardless
+// of syntax — confirmed against interval.start_time, start_time, and
+// exercise_type. Pinned here so a future API change (in either direction)
+// is caught instead of silently re-breaking the tool description's advice.
+test("filter is rejected for exercise, not just unsupported syntax", { skip }, async () => {
+  const res = await probe.send("tools/call", {
+    name: "googlehealth_list_data_points",
+    arguments: {
+      data_type: "exercise",
+      filter: 'exercise.interval.start_time >= "2026-06-09T00:00:00Z"',
+    },
+  });
+  assert.equal(res.result?.isError, true, "exercise should reject filter, not silently ignore it");
+  assert.match(res.result.content[0].text, /INVALID_DATA_POINT_FILTER_DATA_TYPE_MEMBER/);
 });
 
 test("an invalid data type is rejected by the schema, not the API", { skip }, async () => {
