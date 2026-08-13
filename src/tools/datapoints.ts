@@ -5,6 +5,7 @@ import { formatDataPoints } from "../formatters.js";
 import {
   READONLY_ANNOTATIONS,
   ResponseFormat,
+  TRUNCATION_CAUTION,
   WIDE_WINDOW_GUIDANCE,
   dataTypeEnum,
   fetchNonEmptyPage,
@@ -28,7 +29,8 @@ const SEARCH_TOOL_GUIDANCE =
   " `filter` only matches on time range — it cannot select by exercise subtype, activity " +
   "name, or any other field. To find something specific, pull the wide window in one call " +
   "and inspect each result's fields yourself. When pulling a wide window, also raise " +
-  "page_size toward its max (100) rather than paging through it in small steps.";
+  "page_size toward its max (100) rather than paging through it in small steps." +
+  TRUNCATION_CAUTION;
 
 /**
  * `list` and `reconcile` take the same arguments and return the same shape;
