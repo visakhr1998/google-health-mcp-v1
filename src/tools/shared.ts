@@ -217,6 +217,22 @@ export const WIDE_WINDOW_GUIDANCE =
   "a wide window (90+ days) rather than starting narrow and re-querying wider each time " +
   "the result comes back empty. Narrow the window only when the user specified one.";
 
+/**
+ * Appended to every tool description whose response can come back marked
+ * `truncated:true`. Without this, a caller that hits truncation has no
+ * signal that it must not treat the response as exhaustive — which is
+ * exactly what happened live: a truncated response was summarized as "no
+ * other runs since X" when records matching the question had in fact been
+ * left out. `truncated:true` means incomplete, not "safe to summarize as if
+ * complete." One constant reused everywhere so the rule can't drift.
+ */
+export const TRUNCATION_CAUTION =
+  "\n\nIf the response comes back with truncated:true, treat it as incomplete — do not " +
+  'state a completeness conclusion (e.g. "no other X", "that\'s the most recent one") ' +
+  "from it. Some matching records were left out and you do not know which. Follow " +
+  "truncationInfo's advice (page further or narrow the query) before answering, or say " +
+  "explicitly that the answer is based on partial data.";
+
 export const dataTypeEnum = z.enum(DATA_TYPES);
 
 export enum ResponseFormat {

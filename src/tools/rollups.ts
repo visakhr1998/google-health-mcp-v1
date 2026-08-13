@@ -5,6 +5,7 @@ import { formatRollUp } from "../formatters.js";
 import {
   READONLY_ANNOTATIONS,
   ResponseFormat,
+  TRUNCATION_CAUTION,
   WIDE_WINDOW_GUIDANCE,
   dataTypeEnum,
   paginationSchema,
@@ -127,7 +128,8 @@ export function registerRollupTools(server: McpServer): void {
         WIDE_WINDOW_GUIDANCE +
         " A wide range is cheap here — the server auto-chunks and pages internally and " +
         "returns every bucket in one response, so there is no need to page manually or " +
-        "start narrow. Use max_buckets only if you want to cap the response size.",
+        "start narrow. Use max_buckets only if you want to cap the response size." +
+        TRUNCATION_CAUTION,
       inputSchema: {
         data_type: dataTypeEnum.describe("The health data type (kebab-case)"),
         start_date: dateSchema("2026-06-09", "Start date inclusive"),
@@ -180,11 +182,14 @@ export function registerRollupTools(server: McpServer): void {
       description:
         "Aggregate health data points over physical-time windows (e.g. hourly buckets). " +
         "Returns bucketed summaries between two timestamps.\n\n" +
-        "Returns: { rollupDataPoints: [{ startTime, endTime, [dataType]: { ... } }] }\n\n" +
+        "Returns: { rollupDataPoints: [{ startTime, endTime, [dataType]: { ... } }] }\n" +
+        "If the result is too large it is trimmed to whole buckets and marked truncated:true " +
+        "with truncationInfo; the JSON always parses.\n\n" +
         "Required scope: depends on data type category." +
         WIDE_WINDOW_GUIDANCE +
         " When pulling a wide range, also raise page_size toward its max (100) rather " +
-        "than paging through it in small steps.",
+        "than paging through it in small steps." +
+        TRUNCATION_CAUTION,
       inputSchema: {
         data_type: dataTypeEnum.describe("The health data type (kebab-case)"),
         start_time: z.string().describe("Start timestamp in RFC 3339 format (e.g. 2026-06-01T00:00:00Z)"),
