@@ -39,27 +39,91 @@ export type FitResult =
   | { ok: true; text: string; truncated: boolean }
   | { ok: false; message: string };
 
+function tooLargeError(): FitResult {
+  return {
+    ok: false,
+    message:
+      `Error: RESPONSE_TOO_LARGE. The response exceeds the ${CHARACTER_LIMIT}-character ` +
+      "limit and no valid subset could be returned. Narrow the query with a filter, a " +
+      "smaller date range, or a smaller page_size.",
+  };
+}
+
 function renderWithRecords(
   payload: Record<string, unknown>,
   field: string,
-  records: readonly unknown[],
-  keep: number
+  kept: readonly unknown[],
+  omittedCount: number
 ): string {
   return JSON.stringify(
     {
       ...payload,
-      [field]: records.slice(0, keep),
+      [field]: kept,
       truncated: true,
       truncationInfo: {
-        returnedRecords: keep,
-        omittedRecords: records.length - keep,
+        returnedRecords: kept.length,
+        omittedRecords: omittedCount,
         characterLimit: CHARACTER_LIMIT,
-        reason: "Response exceeded the character limit. Use page_token or a narrower filter.",
+        reason:
+          omittedCount > 0
+            ? "Response exceeded the character limit. One or more unusually large records " +
+              "were dropped so the rest could still be returned — this is not necessarily " +
+              "the most recent records. Use page_token or a narrower filter to see everything."
+            : "Response exceeded the character limit. Use page_token or a narrower filter.",
       },
     },
     null,
     2
   );
+}
+
+/**
+ * Fit `records` under the character budget by dropping the largest
+ * individual records first, not the tail.
+ *
+ * The previous approach kept the largest *prefix* that fit, found by binary
+ * search. That works when records are roughly uniform in size, but breaks
+ * when one early record is disproportionately large — e.g. an `exercise`
+ * data point for a paused multi-hour hike, whose event log alone can consume
+ * most of the budget. Every prefix that includes it inherits its size, so the
+ * scan has to cut off immediately after it, silently discarding every later
+ * record even though most of them are small and would easily fit on their
+ * own (issue #17).
+ *
+ * Removing the biggest offenders first — regardless of position — keeps
+ * those small records instead of losing them to one oversized neighbor.
+ * Relative order is preserved among whatever survives.
+ */
+function trimToFit(
+  payload: Record<string, unknown>,
+  field: string,
+  records: readonly unknown[]
+): FitResult {
+  const sizes = records.map((r) => JSON.stringify(r).length);
+  const dropped = new Set<number>();
+
+  const render = (): string => {
+    const kept = records.filter((_, i) => !dropped.has(i));
+    return renderWithRecords(payload, field, kept, dropped.size);
+  };
+
+  while (render().length > CHARACTER_LIMIT && dropped.size < records.length) {
+    let worstIdx = -1;
+    let worstSize = -1;
+    for (let i = 0; i < records.length; i++) {
+      if (dropped.has(i)) continue;
+      if (sizes[i] > worstSize) {
+        worstSize = sizes[i];
+        worstIdx = i;
+      }
+    }
+    dropped.add(worstIdx);
+  }
+
+  if (dropped.size >= records.length) {
+    return tooLargeError();
+  }
+  return { ok: true, text: render(), truncated: true };
 }
 
 /**
@@ -82,33 +146,11 @@ export function fitJson(data: unknown): FitResult {
     const payload = data as Record<string, unknown>;
     const field = RECORD_FIELDS.find((f) => Array.isArray(payload[f]));
     if (field) {
-      const records = payload[field] as unknown[];
-      // Largest prefix of records that still fits, by binary search.
-      let low = 0;
-      let high = records.length;
-      let best = 0;
-      while (low <= high) {
-        const mid = Math.floor((low + high) / 2);
-        if (renderWithRecords(payload, field, records, mid).length <= CHARACTER_LIMIT) {
-          best = mid;
-          low = mid + 1;
-        } else {
-          high = mid - 1;
-        }
-      }
-      if (best > 0) {
-        return { ok: true, text: renderWithRecords(payload, field, records, best), truncated: true };
-      }
+      return trimToFit(payload, field, payload[field] as unknown[]);
     }
   }
 
-  return {
-    ok: false,
-    message:
-      `Error: RESPONSE_TOO_LARGE. The response exceeds the ${CHARACTER_LIMIT}-character ` +
-      "limit and no valid subset could be returned. Narrow the query with a filter, a " +
-      "smaller date range, or a smaller page_size.",
-  };
+  return tooLargeError();
 }
 
 /** Converts a throw into an error result rather than killing the tool call. */

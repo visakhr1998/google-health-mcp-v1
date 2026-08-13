@@ -93,6 +93,47 @@ test("the continuation token survives truncation", () => {
   assert.equal(JSON.parse(fit.text).nextPageToken, "TOKEN123");
 });
 
+// ── Issue #17: an oversized record must not evict its small neighbors ───────
+//
+// The regression: a prefix-based trim keeps the largest *leading* run of
+// records that fits. One disproportionately large record early in the list
+// (e.g. an exercise data point with a huge event log) forces every prefix
+// that includes it to inherit its size, so the scan cuts off right after it
+// — silently dropping every later record even though most are tiny and would
+// easily fit on their own.
+
+function payloadWithOneGiantRecord(smallRecords: number) {
+  return {
+    dataPoints: [
+      { id: "small-0", note: "before the giant one" },
+      { id: "giant", filler: "x".repeat(CHARACTER_LIMIT) },
+      ...Array.from({ length: smallRecords }, (_, i) => ({
+        id: `small-${i + 1}`,
+        note: "after the giant one",
+      })),
+    ],
+  };
+}
+
+test("dropping the oversized record keeps its small neighbors, not just a prefix", () => {
+  const fit = fitJson(payloadWithOneGiantRecord(20));
+  assert.equal(fit.ok, true);
+  if (!fit.ok) return;
+  assert.equal(fit.truncated, true);
+
+  const parsed = JSON.parse(fit.text);
+  const ids: string[] = parsed.dataPoints.map((p: { id: string }) => p.id);
+
+  assert.ok(!ids.includes("giant"), "the oversized record should be the one dropped");
+  assert.ok(ids.includes("small-0"), "small records before the giant one should survive");
+  assert.ok(
+    ids.includes("small-20"),
+    "small records after the giant one should survive too, not just be cut off"
+  );
+  assert.equal(ids.length, 21, "only the giant record should have been omitted");
+  assert.equal(parsed.truncationInfo.omittedRecords, 1);
+});
+
 test("rollupDataPoints is trimmed the same way as dataPoints", () => {
   const fit = fitJson({
     rollupDataPoints: Array.from({ length: 300 }, (_, i) => ({ i, filler: "z".repeat(400) })),
