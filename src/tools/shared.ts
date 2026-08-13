@@ -163,6 +163,18 @@ export async function fetchNonEmptyPage<T extends Record<string, unknown>>(
   return { ...page, hasMore: Boolean(page.nextPageToken) };
 }
 
+/**
+ * Search-strategy guidance appended to discovery-oriented tool descriptions.
+ * Steers callers away from narrow-then-widen date-range guessing (7 days,
+ * then 14, then 30, ...) — each retry is a wasted call where one generous
+ * window would have answered the question outright. One constant reused
+ * everywhere so the rule can't drift out of sync between tools.
+ */
+export const WIDE_WINDOW_GUIDANCE =
+  "\n\nSearch strategy: if the user hasn't given you a specific date range, default to " +
+  "a wide window (90+ days) rather than starting narrow and re-querying wider each time " +
+  "the result comes back empty. Narrow the window only when the user specified one.";
+
 export const dataTypeEnum = z.enum(DATA_TYPES);
 
 export enum ResponseFormat {

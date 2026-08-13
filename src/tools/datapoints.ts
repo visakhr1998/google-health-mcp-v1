@@ -5,6 +5,7 @@ import { formatDataPoints } from "../formatters.js";
 import {
   READONLY_ANNOTATIONS,
   ResponseFormat,
+  WIDE_WINDOW_GUIDANCE,
   dataTypeEnum,
   fetchNonEmptyPage,
   jsonResult,
@@ -13,6 +14,21 @@ import {
   responseFormatSchema,
   safeTool,
 } from "./shared.js";
+
+/**
+ * `filter` only matches on time range; it cannot select by exercise subtype,
+ * activity name, or any other field. A model searching for something
+ * specific (e.g. "my last run" among mixed exercise entries) has no
+ * server-side way to ask for that subtype, so the only correct move is to
+ * pull a wide window in one call and inspect each result itself — not to
+ * guess narrower filters or re-query on a hunch.
+ */
+const SEARCH_TOOL_GUIDANCE =
+  WIDE_WINDOW_GUIDANCE +
+  " `filter` only matches on time range — it cannot select by exercise subtype, activity " +
+  "name, or any other field. To find something specific, pull the wide window in one call " +
+  "and inspect each result's fields yourself. When pulling a wide window, also raise " +
+  "page_size toward its max (100) rather than paging through it in small steps.";
 
 /**
  * `list` and `reconcile` take the same arguments and return the same shape;
@@ -32,7 +48,7 @@ function registerQueryTool(
     options.name,
     {
       title: options.title,
-      description: options.description,
+      description: options.description + SEARCH_TOOL_GUIDANCE,
       inputSchema: {
         data_type: dataTypeEnum.describe(
           "The health data type to query (kebab-case, e.g. 'steps', 'heart-rate', 'sleep')"
